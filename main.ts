@@ -9,8 +9,8 @@
 //     previous bar), on a symbol not held, and only when both filters pass:
 //       (a) trend filter — the slow EMA is rising, or the close is above the
 //           long EMA(50);
-//       (b) gap filter — (close - EMA(13)) / EMA(13) is at least 0.2%
-//           (20 bps) at the cross bar. A zero-volume bar signals nothing.
+//       (b) gap filter — (close - EMA(13)) / EMA(13) is at least 0.3%
+//           (30 bps) at the cross bar. A zero-volume bar signals nothing.
 //   - Exit, whole position: EMA(13) crosses back above EMA(8) (the sell
 //     signal is held while EMA(13) stays above EMA(8), so a sell the market
 //     refuses is re-sent on the next bar), or the position is worth at least
@@ -29,29 +29,12 @@
 //   - Deterministic: float64 arithmetic only, no clock, no randomness, no
 //     environment, no network, no file reads — the two grading runs produce
 //     byte-identical action logs.
-//
-// Why these numbers: on the 136-bar dev window (a broad downtrend where
-// buy-and-hold loses ~8%) the 8/13 pair with the gap filter only takes
-// crosses that already show follow-through, and the equity/28 stake keeps
-// most of the capital in USDC, so the bot loses little while still trading
-// often enough (~42 trades) to clear the 8-trade guardrail even on a
-// 72-bar final window. Max drawdown stays under ~1%.
 
 import { BPS, runBars, type Bar, type BarsState, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
 
 const FAST_SPAN = 8;
 const SLOW_SPAN = 13;
 const LONG_SPAN = 50;
-/** Stake divisor: one entry risks equity / 28. */
-const STAKE_DIVISOR = 28n;
-/** Gap filter: (close - EMA(13)) / EMA(13) must be at least 0.2% at the cross bar. */
-const GAP_MIN = 0.002;
-/** Take-profit: worth 3/2 of its cost. */
-const TAKE_PROFIT_NUM = 3n;
-const TAKE_PROFIT_DEN = 2n;
-/** Stop-loss: worth 17/20 of its cost (-15%). */
-const STOP_NUM = 17n;
-const STOP_DEN = 20n;
 const MAX_SLIPPAGE_BPS = 100;
 
 interface Ema {
@@ -119,10 +102,10 @@ function withTrend(s: Series, close: number): boolean {
   return rising || aboveLong;
 }
 
-/** Gap filter: the close sits at least 0.2% above the slow EMA at the cross bar. */
+/** Gap filter: the close sits at least 0.3% above the slow EMA at the cross bar. */
 function withGap(s: Series, close: number): boolean {
   if (s.slow.value === null) return false;
-  return (close - s.slow.value) / s.slow.value >= GAP_MIN;
+  return (close - s.slow.value) / s.slow.value >= 0.003;
 }
 
 /** Whether a held position exits on this close: held sell signal, take-profit, or stop-loss. */
@@ -130,8 +113,8 @@ function shouldExit(state: BarsState, symbol: string, held: { qty: bigint; cost:
   if (signal) return true;
   const value = state.value(symbol, held.qty);
   return (
-    value * TAKE_PROFIT_DEN >= held.cost * TAKE_PROFIT_NUM ||
-    value * STOP_DEN <= held.cost * STOP_NUM
+    value * 2n >= held.cost * 3n ||
+    value * 20n <= held.cost * 17n
   );
 }
 
@@ -165,7 +148,7 @@ await runBars({
 
     const orders: (SellInput | BuyInput)[] = sells.slice(0, caps.max_orders_per_bar);
     const slots = Math.min(state.hello.symbols.length, caps.max_open_positions);
-    const stake = state.equity / STAKE_DIVISOR;
+    const stake = state.equity / 28n;
     const byWeight = (BigInt(caps.max_weight_bps) * state.equity) / BPS;
     let room = slots - state.positions.size + orders.length;
     let cash = state.cash;
