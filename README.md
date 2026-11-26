@@ -1,53 +1,68 @@
-# Tiny Bot v2 — EMA Crossover Trend Follower
+# Tiny Bot v2 — EMA Crossover Paper Trader
 
-![Bounty](https://make.fun/badge/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1.svg)
-![Rank](https://make.fun/badge/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1/Kroco365/tiny-bot-solana-v2/rank.svg)
-![Reward](https://make.fun/badge/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1/Kroco365/tiny-bot-solana-v2/reward.svg)
+[![Bounty](https://make.fun/badge/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1.svg)](https://make.fun/bounty/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1)
+[![Rank](https://make.fun/badge/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1/Kroco365/tiny-bot-solana-v2/rank.svg)](https://make.fun/bounty/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1)
+[![Reward](https://make.fun/badge/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1/Kroco365/tiny-bot-solana-v2/reward.svg)](https://make.fun/bounty/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1)
 
-Entry for the [Tiny Bot, Easy $2: Beat Buy-and-Hold on Solana](https://make.fun/bounty/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1) bounty on make.fun.
+Entry for the make.fun bounty
+[Tiny Bot, Easy $2: Beat Buy-and-Hold on Solana](https://make.fun/bounty/u-gorun-gadget-tiny-bot-easy-2-beat-a48f3ce1):
+a tiny long-only paper-trading bot for the `bars-replay/v1` harness
+(7 Solana symbols, hourly bars). It runs on Node 22 with no dependencies,
+no network access, no randomness and no clock reads — fully deterministic,
+so the harness's two executions reproduce byte for byte.
 
 ## Strategy
 
-A tiny, deterministic paper-trading bot for the bars-replay harness. Long only,
-hourly bars, 7 Solana symbols (FARTCOIN, JITOSOL, POPCAT, RAY, SOL, WETH, WIF).
+Per symbol, on hourly closes, the bot tracks EMA(8), EMA(13) and EMA(50)
+in float64, starting from zero and stepped once per bar.
 
-Per symbol it tracks EMA(8), EMA(13) and EMA(50) over closes in float64. Each
-EMA starts as the mean of its first `span` closes, then moves 2 / (span + 1) of
-the way to each new close. Bars are read during warm-up too, so the indicators
-are already seeded when trading opens.
+**Open a long** when all three hold on the current bar:
 
-**Entry** — EMA(8) crosses above EMA(13) on a symbol not held, and only when
-both filters pass:
+- EMA(8) crosses above EMA(13) (strictly: previous fast below previous
+  mid, current fast above current mid);
+- trend filter: EMA(50) is rising, or the close is above EMA(50);
+- gap filter: `(close - EMA(13)) / EMA(13) >= 0.3%`.
 
-- **Trend filter** — the slow EMA is rising, or the close is above EMA(50).
-- **Gap filter** — (close − EMA(13)) / EMA(13) is at least 0.3% at the cross
-  bar. A zero-volume bar signals nothing.
+**Close the long** when any of these holds:
 
-**Exit** — the whole position, when EMA(13) crosses back above EMA(8) (the
-sell signal is held while EMA(13) stays above EMA(8), so a refused sell is
-re-sent on the next bar), or the position is worth at least 50% over its cost
-(take-profit), or at least 15% under it (stop-loss).
+- EMA(8) crosses back below EMA(13);
+- take-profit: the close reaches +50% above the entry close;
+- stop-loss: the close reaches -15% below the entry close.
 
-**Sizing** — equity / 28 per entry, capped at the 25% per-position weight limit
-and at the cash this reply has not spent yet; below the minimum notional it
-buys nothing. Sells go first in each reply (their proceeds only fund later
-replies, never the buys in the same reply). At most `max_orders_per_bar`
-orders per reply. Slippage is capped at 100 bps past the close the order was
-decided on.
+**Sizing and execution**
 
-**Deterministic** — float64 math only, no clock, no randomness, no
-environment, no network, no file reads.
+- Each entry stakes `current equity / 28` in quote currency (USDC).
+- One position per symbol at a time; a new entry signal is ignored while
+  already long in that symbol.
+- Sell orders are sent before buy orders in every batch.
+- Slippage cap 100 bps on every order.
+- A position still held after a sell was sent means that sell was
+  rejected, so the exit rules are simply re-evaluated on the next bar;
+  the harness account is the source of truth, no in-flight flag is kept.
 
-## Dev grade (136-bar dev window)
+## Files
 
-| Metric | v2 | v1 | Buy-and-hold |
-| --- | --- | --- | --- |
-| Net PnL (USDC) | −39.42 | −233.07 | −869.34 |
-| Margin over buy-and-hold | +829.92 | +636.27 | — |
-| Trades | 32 | 47 | — |
-| Max drawdown | 0.75% | 3.69% | — |
-| Rejected orders | 0 | 0 | — |
+- `main.ts` — the bot (entrypoint, runs on Node 22).
+- `vendor/makefun-bars.ts` — the kit's `agent-fun/bars-replay/v1` shim,
+  copied verbatim from the competition kit.
+- `.makefun/owner.json` — the claim file naming the payout wallet.
 
-The small equity/28 stake keeps most of the capital in USDC, so the bot loses
-little in a broad downtrend while still trading often enough to clear the
-8-trade guardrail.
+## Local grade (dev kit)
+
+Graded with the competition kit's `grade-local` (`--driver process`):
+
+- Net PnL **-25.72 USDC** over 33 trades (6 symbols), win rate 0.26,
+  max drawdown **0.74%**, 0 rejected orders.
+- Buy-and-hold baseline on the same window: -869.34 USDC, so this bot
+  beats buy-and-hold by **+843.62 USDC**.
+- Guardrails met (at least 8 trades, drawdown under 25%).
+
+Reproduce it from the unpacked kit directory:
+
+```sh
+node cli/makefun.mjs grade-local --kit . --bot <this repository> --driver process --worktree
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
